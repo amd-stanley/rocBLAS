@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright 2016 Advanced Micro Devices, Inc.
+ * Copyright 2016-2018 Advanced Micro Devices, Inc.
  *
  * ************************************************************************ */
 
@@ -108,6 +108,10 @@ ROCBLAS_EXPORT rocblas_status rocblas_get_matrix(rocblas_int rows,
                                                  rocblas_int ldb);
 
 #ifdef __cplusplus
+}
+
+namespace rocblas {
+ROCBLAS_EXPORT void reinit_logs(); // For testing only
 }
 #endif
 

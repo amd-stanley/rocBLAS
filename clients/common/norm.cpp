@@ -1,15 +1,16 @@
 /* ************************************************************************
- * Copyright 2016 Advanced Micro Devices, Inc.
+ * Copyright 2018 Advanced Micro Devices, Inc.
  *
  * ************************************************************************ */
 
-#include <stdio.h>
+#include <cstdio>
 #include <memory>
 #include <limits>
 #include "rocblas.h"
-#include "norm.h"
 #include "cblas.h"
-#include "utility.h"
+#include "norm.hpp"
+#include "utility.hpp"
+#include "rocblas_vector.hpp"
 
 /* =====================================================================
      README: Norm check: norm(A-B)/norm(A), evaluate relative error
@@ -24,10 +25,7 @@
     xlange and xaxpy prototype are like following
     =================================================================== */
 
-#ifdef __cplusplus
 extern "C" {
-#endif
-
 float slange_(char* norm_type, int* m, int* n, float* A, int* lda, float* work);
 double dlange_(char* norm_type, int* m, int* n, double* A, int* lda, double* work);
 float clange_(char* norm_type, int* m, int* n, rocblas_float_complex* A, int* lda, float* work);
@@ -49,10 +47,7 @@ void zaxpy_(int* n,
             int* incx,
             rocblas_double_complex* y,
             int* incy);
-
-#ifdef __cplusplus
 }
-#endif
 
 /* ============================Norm Check for General Matrix: float/double/complex template
  * speciliazation ======================================= */
@@ -66,16 +61,15 @@ double norm_check_general<rocblas_half>(char norm_type,
                                         rocblas_half* hCPU,
                                         rocblas_half* hGPU)
 {
-    // norm type can be O', 'I', 'F', 'o', 'i', 'f' for one, infinity or Frobenius norm
+    // norm type can be 'O', 'I', 'F', 'o', 'i', 'f' for one, infinity or Frobenius norm
     // one norm is max column sum
     // infinity norm is max row sum
     // Frobenius is l2 norm of matrix entries
 
     double error_double = std::numeric_limits<double>::quiet_NaN();
 
-    std::unique_ptr<float[]> hCPU_float(new float[N * lda]());
-    std::unique_ptr<float[]> hGPU_float(new float[N * lda]());
-    for(int i = 0; i < N * lda; i++)
+    host_vector<float> hCPU_float(N * lda), hGPU_float(N * lda);
+    for(rocblas_int i = 0; i < N * lda; i++)
     {
         hCPU_float[i] = half_to_float(hCPU[i]);
         hGPU_float[i] = half_to_float(hGPU[i]);
@@ -86,10 +80,10 @@ double norm_check_general<rocblas_half>(char norm_type,
     float alpha      = -1.0f;
     rocblas_int size = lda * N;
 
-    float cpu_norm = slange_(&norm_type, &M, &N, hCPU_float.get(), &lda, &work);
-    saxpy_(&size, &alpha, hCPU_float.get(), &incx, hGPU_float.get(), &incx);
+    float cpu_norm = slange_(&norm_type, &M, &N, hCPU_float, &lda, &work);
+    saxpy_(&size, &alpha, hCPU_float, &incx, hGPU_float, &incx);
 
-    float error_float = slange_(&norm_type, &M, &N, hGPU_float.get(), &lda, &work) / cpu_norm;
+    float error_float = slange_(&norm_type, &M, &N, hGPU_float, &lda, &work) / cpu_norm;
     error_double      = static_cast<double>(error_float);
 
     return error_double;
@@ -137,6 +131,21 @@ double norm_check_general<double>(
     double error = dlange_(&norm_type, &M, &N, hGPU, &lda, work) / cpu_norm;
 
     return error;
+}
+
+template <>
+double norm_check_general<int32_t>(
+    char norm_type, rocblas_int M, rocblas_int N, rocblas_int lda, int32_t* hCPU, int32_t* hGPU)
+{
+    // Upconvert int32_t to double and call double version
+    host_vector<double> hCPU_double(M * N), hGPU_double(M * N);
+
+    for(int i = 0; i < M * N; i++)
+    {
+        hCPU_double[i] = static_cast<double>(hCPU[i]);
+        hGPU_double[i] = static_cast<double>(hGPU[i]);
+    }
+    return norm_check_general<double>(norm_type, M, N, lda, hCPU_double, hGPU_double);
 }
 
 template <>
@@ -210,13 +219,13 @@ double norm_check_general<rocblas_half>(char norm_type,
     // use triangle inequality ||a+b|| <= ||a|| + ||b|| to calculate upper limit for Frobenius norm
     // of strided batched matrix
 
-    std::unique_ptr<float[]> hCPU_float(new float[N * lda + (batch_count - 1) * stride_a]());
-    std::unique_ptr<float[]> hGPU_float(new float[N * lda + (batch_count - 1) * stride_a]());
-    for(int i_batch = 0; i_batch < batch_count; i_batch++)
+    rocblas_int totalsize = N * lda + (batch_count - 1) * stride_a;
+    host_vector<float> hCPU_float(totalsize), hGPU_float(totalsize);
+    for(rocblas_int i_batch = 0; i_batch < batch_count; i_batch++)
     {
-        for(int i = 0; i < N * lda; i++)
+        for(rocblas_int i = 0; i < N * lda; i++)
         {
-            int index         = i + i_batch * stride_a;
+            auto index        = i + i_batch * stride_a;
             hCPU_float[index] = half_to_float(hCPU[index]);
             hGPU_float[index] = half_to_float(hGPU[index]);
         }
@@ -229,15 +238,73 @@ double norm_check_general<rocblas_half>(char norm_type,
 
     double cumulative_error = 0.0;
 
-    for(int i = 0; i < batch_count; i++)
+    for(rocblas_int i = 0; i < batch_count; i++)
     {
-        float cpu_norm = slange_(&norm_type, &M, &N, &(hCPU_float[i * stride_a]), &lda, &work);
+        float cpu_norm = slange_(&norm_type, &M, &N, &hCPU_float[i * stride_a], &lda, &work);
 
-        saxpy_(
-            &size, &alpha, &(hCPU_float[i * stride_a]), &incx, &(hGPU_float[i * stride_a]), &incx);
+        saxpy_(&size, &alpha, &hCPU_float[i * stride_a], &incx, &hGPU_float[i * stride_a], &incx);
 
         float error =
-            slange_(&norm_type, &M, &N, &(hGPU_float[i * stride_a]), &lda, &work) / cpu_norm;
+            slange_(&norm_type, &M, &N, &hGPU_float[i * stride_a], &lda, &work) / cpu_norm;
+
+        if(norm_type == 'F' || norm_type == 'f')
+        {
+            cumulative_error += error;
+        }
+        else if(norm_type == 'O' || norm_type == 'o' || norm_type == 'I' || norm_type == 'i')
+        {
+            cumulative_error = cumulative_error > error ? cumulative_error : error;
+        }
+    }
+
+    return cumulative_error;
+}
+
+//=====Norm Check for strided_batched matrix
+template <>
+double norm_check_general(char norm_type,
+                          rocblas_int M,
+                          rocblas_int N,
+                          rocblas_int lda,
+                          rocblas_int stride_a,
+                          rocblas_int batch_count,
+                          rocblas_int* hCPU,
+                          rocblas_int* hGPU)
+{
+    // norm type can be O', 'I', 'F', 'o', 'i', 'f' for one, infinity or Frobenius norm
+    // one norm is max column sum
+    // infinity norm is max row sum
+    // Frobenius is l2 norm of matrix entries
+    //
+    // use triangle inequality ||a+b|| <= ||a|| + ||b|| to calculate upper limit for Frobenius norm
+    // of strided batched matrix
+
+    rocblas_int totalsize = N * lda + (batch_count - 1) * stride_a;
+    host_vector<double> hCPU_double(totalsize), hGPU_double(totalsize);
+    for(rocblas_int i_batch = 0; i_batch < batch_count; i_batch++)
+    {
+        for(rocblas_int i = 0; i < N * lda; i++)
+        {
+            auto index         = i + i_batch * stride_a;
+            hCPU_double[index] = hCPU[index];
+            hGPU_double[index] = hGPU[index];
+        }
+    }
+
+    double work;
+    rocblas_int incx        = 1;
+    double alpha            = -1.0f;
+    rocblas_int size        = lda * N;
+    double cumulative_error = 0.0;
+
+    for(rocblas_int i = 0; i < batch_count; i++)
+    {
+        double cpu_norm = dlange_(&norm_type, &M, &N, &hCPU_double[i * stride_a], &lda, &work);
+
+        daxpy_(&size, &alpha, &hCPU_double[i * stride_a], &incx, &hGPU_double[i * stride_a], &incx);
+
+        double error =
+            dlange_(&norm_type, &M, &N, &hGPU_double[i * stride_a], &lda, &work) / cpu_norm;
 
         if(norm_type == 'F' || norm_type == 'f')
         {

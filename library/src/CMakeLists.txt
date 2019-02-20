@@ -60,7 +60,7 @@ if( BUILD_WITH_TENSILE )
   if( CMAKE_CXX_COMPILER MATCHES ".*/hcc$" )
     # Remove following when hcc is fixed; hcc emits following spurious warning ROCm v1.6.1
     # "clang-5.0: warning: argument unused during compilation: '-isystem /opt/rocm/include'"
-    target_compile_options( Tensile PRIVATE -Wno-unused-command-line-argument )
+    target_compile_options( Tensile PRIVATE -Wno-unused-command-line-argument)
   endif( )
 
   if( ROCBLAS_SHARED_LIBS )
@@ -85,9 +85,9 @@ set( rocblas_auxiliary_source
   include/status.h
   include/rocblas_unique_ptr.hpp
   handle.cpp
-  utility.cpp
   rocblas_auxiliary.cpp
   status.cpp
+  buildinfo.cpp
 )
 
 set( rocblas_ex_source
@@ -103,12 +103,12 @@ set( rocblas_blas3_source
 
 set( rocblas_blas2_source
   blas2/rocblas_gemv.cpp
+  blas2/rocblas_trsv.cpp
   blas2/rocblas_ger.cpp
   blas2/rocblas_syr.cpp
 )
 
 set( rocblas_blas1_source
-  blas1/fetch_template.cpp
   blas1/rocblas_amin.cpp
   blas1/rocblas_amax.cpp
   blas1/rocblas_asum.cpp
@@ -140,8 +140,7 @@ else()
 target_link_libraries( rocblas PRIVATE hip::hip_hcc hip::hip_device hcc::hccshared )
 endif()
 
-# Test for specific compiler features if cmake version is recent enough
-target_compile_features( rocblas PRIVATE cxx_static_assert cxx_nullptr cxx_auto_type )
+set_target_properties( rocblas PROPERTIES CXX_STANDARD 14 CXX_STANDARD_REQUIRED ON )
 
 if( CMAKE_CXX_COMPILER MATCHES ".*/hcc$" )
   # Remove following when hcc is fixed; hcc emits following spurious warning ROCm v1.6.1

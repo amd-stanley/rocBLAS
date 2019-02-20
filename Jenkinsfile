@@ -129,18 +129,7 @@ void checkout_and_version( project_paths paths )
       extensions: scm.extensions + [[$class: 'CleanCheckout']],
       userRemoteConfigs: scm.userRemoteConfigs
     ])
-
-    if( fileExists( 'CMakeLists.txt' ) )
-    {
-      def cmake_version_file = readFile( 'CMakeLists.txt' ).trim()
-      //echo "cmake_version_file:\n${cmake_version_file}"
-
-      cmake_version_file = cmake_version_file.replaceAll(/(\d+\.)(\d+\.)(\d+\.)\d+/, "\$1\$2\$3${env.BUILD_ID}")
-      //echo "cmake_version_file:\n${cmake_version_file}"
-      writeFile( file: 'CMakeLists.txt', text: cmake_version_file )
-    }
   }
-
 }
 
 ////////////////////////////////////////////////////////////////////////
@@ -217,7 +206,7 @@ def docker_build_inside_image( def build_image, compiler_data compiler_args, doc
     stage( "Test ${compiler_args.compiler_name} ${compiler_args.build_config}" )
     {
       // Cap the maximum amount of testing to be a few hours; assume failure if the time limit is hit
-      timeout(time: 2, unit: 'HOURS')
+      timeout(time: 4, unit: 'HOURS')
       {
         if(isJobStartedByTimer())
         {
@@ -234,7 +223,7 @@ def docker_build_inside_image( def build_image, compiler_data compiler_args, doc
                 set -x
                 cd ${paths.project_build_prefix}/build/release/clients/staging
                 LD_LIBRARY_PATH=/opt/rocm/hcc/lib ./example-sscal${build_type_postfix}
-                LD_LIBRARY_PATH=/opt/rocm/hcc/lib ./rocblas-test${build_type_postfix} --gtest_output=xml --gtest_color=yes  --gtest_filter=*quick*:*pre_checkin*-*known_bug* #--gtest_filter=*checkin* 
+                LD_LIBRARY_PATH=/opt/rocm/hcc/lib ./rocblas-test${build_type_postfix} --gtest_output=xml --gtest_color=yes  --gtest_filter=*quick*:*pre_checkin*-*known_bug* #--gtest_filter=*checkin*
             """
           junit "${paths.project_build_prefix}/build/release/clients/staging/*.xml"
         }
@@ -526,44 +515,13 @@ def build_pipeline( compiler_data compiler_args, docker_data docker_args, projec
 //    currentBuild.result = 'UNSTABLE'
 //  }
 //},
-//parallel rocm_ubuntu:
-//{
-//  node( 'docker && rocm && gfx900')
-//  {
-//    def hcc_docker_args = new docker_data(
-//        from_image:'rocm/dev-ubuntu-16.04:1.7.1',
-//        build_docker_file:'dockerfile-build-ubuntu',
-//        install_docker_file:'dockerfile-install-ubuntu',
-//        docker_run_args:'--device=/dev/kfd --device=/dev/dri --group-add=video',
-//        docker_build_args:' --pull' )
-//
-//    def hcc_compiler_args = new compiler_data(
-//        compiler_name:'hcc-rocm-ubuntu',
-//        build_config:'Release',
-//        compiler_path:'/opt/rocm/bin/hcc' )
-//
-//    def rocblas_paths = new project_paths(
-//        project_name:'rocblas-ubuntu',
-//        src_prefix:'src',
-//        build_prefix:'src',
-//        build_command: './install.sh -c' )
-//
-//    def print_version_closure = {
-//      sh  """
-//          set -x
-//          /opt/rocm/bin/hcc --version
-//        """
-//    }
-//
-//    build_pipeline( hcc_compiler_args, hcc_docker_args, rocblas_paths, print_version_closure )
-//  }
-//},
-parallel rocm19_ubuntu:
+
+parallel rocm20_ubuntu:
 {
-  node( 'docker && rocm19 && gfx900')
+  node( 'docker && rocm20 && gfx900')
   {
     def hcc_docker_args = new docker_data(
-        from_image:'rocm/dev-ubuntu-16.04:1.9.0',
+        from_image:'rocm/dev-ubuntu-16.04:2.0',
         build_docker_file:'dockerfile-build-ubuntu-rock',
         install_docker_file:'dockerfile-install-ubuntu',
         docker_run_args:'--device=/dev/kfd --device=/dev/dri --group-add=video',
@@ -589,7 +547,49 @@ parallel rocm19_ubuntu:
 
     build_pipeline( hcc_compiler_args, hcc_docker_args, rocblas_paths, print_version_closure )
   }
-} 
+},
+
+rocm20_ubuntu_gfx906:
+{
+    try
+    {
+        node( 'docker && rocm20 && gfx906')
+        {
+        def hcc_docker_args = new docker_data(
+            from_image:'rocm/dev-ubuntu-16.04:2.0',
+            build_docker_file:'dockerfile-build-ubuntu-rock',
+            install_docker_file:'dockerfile-install-ubuntu',
+            docker_run_args:'--device=/dev/kfd --device=/dev/dri --group-add=video',
+            docker_build_args:' --pull' )
+
+        def hcc_compiler_args = new compiler_data(
+            compiler_name:'hcc-rocm19-ubuntu',
+            build_config:'Release',
+            compiler_path:'/opt/rocm/bin/hcc' )
+
+        def rocblas_paths = new project_paths(
+            project_name:'rocblas-ubuntu',
+            src_prefix:'src',
+            build_prefix:'src',
+            build_command: './install.sh -c' )
+
+        def print_version_closure = {
+          sh  """
+              set -x
+              /opt/rocm/bin/hcc --version
+            """
+          }
+
+        build_pipeline( hcc_compiler_args, hcc_docker_args, rocblas_paths, print_version_closure )
+        }
+    }
+    catch( err )
+    {
+      currentBuild.result = 'UNSTABLE'
+    }
+}
+
+
 //,
 // rocm_fedora:
 // {

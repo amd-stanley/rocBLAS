@@ -5,6 +5,9 @@
 # The ROCm platform requires Ubuntu 16.04 or Fedora 24, which has cmake 3.5
 cmake_minimum_required( VERSION 3.5 )
 
+# We use C++14 features
+set( CMAKE_CXX_STANDARD 14 )
+
 # Consider removing this in the future
 # This should appear before the project command, because it does not use FORCE
 if( WIN32 )
@@ -35,7 +38,8 @@ if( NOT TARGET rocblas )
 endif( )
 
 # Hip headers required of all clients; clients use hip to allocate device memory
-find_package( hip REQUIRED CONFIG PATHS /opt/rocm )
+list( APPEND CMAKE_PREFIX_PATH /opt/rocm )
+find_package( hip REQUIRED CONFIG PATHS ${CMAKE_PREFIX_PATH} )
 
 # Quietly look for CUDA, but if not found it's not an error
 # The presense of hip is not sufficient to determine if we want a rocm or cuda backend

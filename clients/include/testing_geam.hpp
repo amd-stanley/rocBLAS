@@ -1,29 +1,23 @@
 /* ************************************************************************
- * Copyright 2016 Advanced Micro Devices, Inc.
+ * Copyright 2018 Advanced Micro Devices, Inc.
  * ************************************************************************ */
 
-#include <sys/time.h>
-#include <stdlib.h>
-#include <iostream>
-#include <fstream>
-#include <vector>
-#include <limits>
-
+#include "rocblas_test.hpp"
+#include "rocblas_math.hpp"
+#include "rocblas_random.hpp"
+#include "rocblas_vector.hpp"
+#include "rocblas_init.hpp"
+#include "rocblas_datatype2string.hpp"
+#include "utility.hpp"
 #include "rocblas.hpp"
-#include "arg_check.h"
-#include "rocblas_test_unique_ptr.hpp"
-#include "utility.h"
-#include "norm.h"
-#include "unit.h"
-#include "flops.h"
-#include <typeinfo>
-
-using namespace std;
+#include "norm.hpp"
+#include "unit.hpp"
+#include "flops.hpp"
 
 /* ============================================================================================ */
 
 template <typename T>
-void testing_geam_bad_arg()
+void testing_geam_bad_arg(const Arguments& arg)
 {
     const rocblas_int M = 100;
     const rocblas_int N = 100;
@@ -38,117 +32,84 @@ void testing_geam_bad_arg()
     const rocblas_operation transA = rocblas_operation_none;
     const rocblas_operation transB = rocblas_operation_none;
 
-    rocblas_status status;
+    rocblas_local_handle handle;
 
-    std::unique_ptr<rocblas_test::handle_struct> unique_ptr_handle(new rocblas_test::handle_struct);
-    rocblas_handle handle = unique_ptr_handle->handle;
+    size_t size_A = N * static_cast<size_t>(lda);
+    size_t size_B = N * static_cast<size_t>(ldb);
+    size_t size_C = N * static_cast<size_t>(ldc);
 
-    rocblas_int size_A = N * lda;
-    rocblas_int size_B = N * ldb;
-    rocblas_int size_C = N * ldc;
+    host_vector<T> hA(size_A);
+    host_vector<T> hB(size_B);
+    host_vector<T> hC(size_C);
 
-    vector<T> hA(size_A);
-    vector<T> hB(size_B);
-    vector<T> hC(size_C);
-
-    srand(1);
+    rocblas_seedrand();
     rocblas_init<T>(hA, M, N, lda);
     rocblas_init<T>(hB, M, N, ldb);
     rocblas_init<T>(hC, M, N, ldc);
 
     // allocate memory on device
-    auto dA_managed = rocblas_unique_ptr{rocblas_test::device_malloc(sizeof(T) * size_A),
-                                         rocblas_test::device_free};
-    auto dB_managed = rocblas_unique_ptr{rocblas_test::device_malloc(sizeof(T) * size_B),
-                                         rocblas_test::device_free};
-    auto dC_managed = rocblas_unique_ptr{rocblas_test::device_malloc(sizeof(T) * size_C),
-                                         rocblas_test::device_free};
-    T* dA = (T*)dA_managed.get();
-    T* dB = (T*)dB_managed.get();
-    T* dC = (T*)dC_managed.get();
+    device_vector<T> dA(size_A);
+    device_vector<T> dB(size_B);
+    device_vector<T> dC(size_C);
     if(!dA || !dB || !dC)
     {
-        PRINT_IF_HIP_ERROR(hipErrorOutOfMemory);
+        CHECK_HIP_ERROR(hipErrorOutOfMemory);
         return;
     }
 
     // copy data from CPU to device, does not work for lda != A_row
-    CHECK_HIP_ERROR(hipMemcpy(dA, hA.data(), sizeof(T) * size_A, hipMemcpyHostToDevice));
-    CHECK_HIP_ERROR(hipMemcpy(dB, hB.data(), sizeof(T) * size_B, hipMemcpyHostToDevice));
-    CHECK_HIP_ERROR(hipMemcpy(dC, hC.data(), sizeof(T) * size_C, hipMemcpyHostToDevice));
+    CHECK_HIP_ERROR(hipMemcpy(dA, hA, sizeof(T) * size_A, hipMemcpyHostToDevice));
+    CHECK_HIP_ERROR(hipMemcpy(dB, hB, sizeof(T) * size_B, hipMemcpyHostToDevice));
+    CHECK_HIP_ERROR(hipMemcpy(dC, hC, sizeof(T) * size_C, hipMemcpyHostToDevice));
 
-    {
-        T* dA_null = nullptr;
+    EXPECT_ROCBLAS_STATUS(
+        rocblas_geam<T>(
+            handle, transA, transB, M, N, &h_alpha, nullptr, lda, &h_beta, dB, ldb, dC, ldc),
+        rocblas_status_invalid_pointer);
 
-        status = rocblas_geam<T>(
-            handle, transA, transB, M, N, &h_alpha, dA_null, lda, &h_beta, dB, ldb, dC, ldc);
+    EXPECT_ROCBLAS_STATUS(
+        rocblas_geam<T>(
+            handle, transA, transB, M, N, &h_alpha, dA, lda, &h_beta, nullptr, ldb, dC, ldc),
+        rocblas_status_invalid_pointer);
 
-        verify_rocblas_status_invalid_pointer(status, "ERROR: A is nullptr");
-    }
-    {
-        T* dB_null = nullptr;
+    EXPECT_ROCBLAS_STATUS(
+        rocblas_geam<T>(
+            handle, transA, transB, M, N, &h_alpha, dA, lda, &h_beta, dB, ldb, nullptr, ldc),
+        rocblas_status_invalid_pointer);
 
-        status = rocblas_geam<T>(
-            handle, transA, transB, M, N, &h_alpha, dA, lda, &h_beta, dB_null, ldb, dC, ldc);
+    EXPECT_ROCBLAS_STATUS(
+        rocblas_geam<T>(handle, transA, transB, M, N, nullptr, dA, lda, &h_beta, dB, ldb, dC, ldc),
+        rocblas_status_invalid_pointer);
 
-        verify_rocblas_status_invalid_pointer(status, "ERROR: B is nullptr");
-    }
-    {
-        T* dC_null = nullptr;
+    EXPECT_ROCBLAS_STATUS(
+        rocblas_geam<T>(handle, transA, transB, M, N, &h_alpha, dA, lda, nullptr, dB, ldb, dC, ldc),
+        rocblas_status_invalid_pointer);
 
-        status = rocblas_geam<T>(
-            handle, transA, transB, M, N, &h_alpha, dA, lda, &h_beta, dB, ldb, dC_null, ldc);
-
-        verify_rocblas_status_invalid_pointer(status, "ERROR: C is nullptr");
-    }
-    {
-        T* h_alpha_null = nullptr;
-
-        status = rocblas_geam<T>(
-            handle, transA, transB, M, N, h_alpha_null, dA, lda, &h_beta, dB, ldb, dC, ldc);
-
-        verify_rocblas_status_invalid_pointer(status, "ERROR: h_alpha is nullptr");
-    }
-    {
-        T* h_beta_null = nullptr;
-
-        status = rocblas_geam<T>(
-            handle, transA, transB, M, N, &h_alpha, dA, lda, h_beta_null, dB, ldb, dC, ldc);
-
-        verify_rocblas_status_invalid_pointer(status, "ERROR: h_beta is nullptr");
-    }
-    {
-        rocblas_handle handle_null = nullptr;
-
-        status = rocblas_geam<T>(
-            handle_null, transA, transB, M, N, &h_alpha, dA, lda, &h_beta, dB, ldb, dC, ldc);
-
-        verify_rocblas_status_invalid_handle(status);
-    }
-    return;
+    EXPECT_ROCBLAS_STATUS(
+        rocblas_geam<T>(
+            nullptr, transA, transB, M, N, &h_alpha, dA, lda, &h_beta, dB, ldb, dC, ldc),
+        rocblas_status_invalid_handle);
 }
 
 template <typename T>
-rocblas_status testing_geam(Arguments argus)
+void testing_geam(const Arguments& arg)
 {
-    rocblas_operation transA = char2rocblas_operation(argus.transA_option);
-    rocblas_operation transB = char2rocblas_operation(argus.transB_option);
+    rocblas_operation transA = char2rocblas_operation(arg.transA);
+    rocblas_operation transB = char2rocblas_operation(arg.transB);
 
-    rocblas_int M = argus.M;
-    rocblas_int N = argus.N;
+    rocblas_int M = arg.M;
+    rocblas_int N = arg.N;
 
-    rocblas_int lda = argus.lda;
-    rocblas_int ldb = argus.ldb;
-    rocblas_int ldc = argus.ldc;
+    rocblas_int lda = arg.lda;
+    rocblas_int ldb = arg.ldb;
+    rocblas_int ldc = arg.ldc;
 
-    T h_alpha = argus.alpha;
-    T h_beta  = argus.beta;
-
-    rocblas_int safe_size = 100; // arbitararily set to 100
+    T h_alpha = arg.alpha;
+    T h_beta  = arg.beta;
 
     T* dC_in_place;
 
-    rocblas_int size_A, size_B, size_C, A_row, A_col, B_row, B_col;
+    rocblas_int A_row, A_col, B_row, B_col;
     rocblas_int inc1_A, inc2_A, inc1_B, inc2_B;
 
     double gpu_time_used, cpu_time_used;
@@ -158,12 +119,7 @@ rocblas_status testing_geam(Arguments argus)
     T rocblas_error_2 = std::numeric_limits<T>::max();
     T rocblas_error   = std::numeric_limits<T>::max();
 
-    rocblas_status status   = rocblas_status_success;
-    rocblas_status status_h = rocblas_status_success;
-    rocblas_status status_d = rocblas_status_success;
-
-    std::unique_ptr<rocblas_test::handle_struct> unique_ptr_handle(new rocblas_test::handle_struct);
-    rocblas_handle handle = unique_ptr_handle->handle;
+    rocblas_local_handle handle;
 
     if(transA == rocblas_operation_none)
     {
@@ -194,46 +150,50 @@ rocblas_status testing_geam(Arguments argus)
         inc2_B = 1;
     }
 
-    size_A = lda * A_col;
-    size_B = ldb * B_col;
-    size_C = ldc * N;
+    size_t size_A = lda * static_cast<size_t>(A_col);
+    size_t size_B = ldb * static_cast<size_t>(B_col);
+    size_t size_C = ldc * static_cast<size_t>(N);
 
     // check here to prevent undefined memory allocation error
     if(M <= 0 || N <= 0 || lda < A_row || ldb < B_row || ldc < M)
     {
-        auto dA_managed = rocblas_unique_ptr{rocblas_test::device_malloc(sizeof(T) * safe_size),
-                                             rocblas_test::device_free};
-        auto dB_managed = rocblas_unique_ptr{rocblas_test::device_malloc(sizeof(T) * safe_size),
-                                             rocblas_test::device_free};
-        auto dC_managed = rocblas_unique_ptr{rocblas_test::device_malloc(sizeof(T) * safe_size),
-                                             rocblas_test::device_free};
-        T* dA = (T*)dA_managed.get();
-        T* dB = (T*)dB_managed.get();
-        T* dC = (T*)dC_managed.get();
+        static const size_t safe_size = 100; // arbitararily set to 100
+        device_vector<T> dA(safe_size);
+        device_vector<T> dB(safe_size);
+        device_vector<T> dC(safe_size);
         if(!dA || !dB || !dC)
         {
-            PRINT_IF_HIP_ERROR(hipErrorOutOfMemory);
-            return rocblas_status_memory_error;
+            CHECK_HIP_ERROR(hipErrorOutOfMemory);
+            return;
         }
 
         CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_host));
-        status = rocblas_geam<T>(
-            handle, transA, transB, M, N, &h_alpha, dA, lda, &h_beta, dB, ldb, dC, ldc);
 
-        geam_arg_check(status, M, N, lda, ldb, ldc);
+        if(M == 0 && N == 0)
+        {
+            CHECK_ROCBLAS_ERROR(rocblas_geam<T>(
+                handle, transA, transB, M, N, &h_alpha, dA, lda, &h_beta, dB, ldb, dC, ldc));
+        }
+        else
+        {
+            EXPECT_ROCBLAS_STATUS(
+                rocblas_geam<T>(
+                    handle, transA, transB, M, N, &h_alpha, dA, lda, &h_beta, dB, ldb, dC, ldc),
+                rocblas_status_invalid_size);
+        }
 
-        return status;
+        return;
     }
 
     // Naming: dX is in GPU (device) memory. hK is in CPU (host) memory
-    vector<T> hA(size_A), hA_copy(size_A);
-    vector<T> hB(size_B), hB_copy(size_B);
-    vector<T> hC_1(size_C);
-    vector<T> hC_2(size_C);
-    vector<T> hC_gold(size_C);
+    host_vector<T> hA(size_A), hA_copy(size_A);
+    host_vector<T> hB(size_B), hB_copy(size_B);
+    host_vector<T> hC_1(size_C);
+    host_vector<T> hC_2(size_C);
+    host_vector<T> hC_gold(size_C);
 
     // Initial Data on CPU
-    srand(1);
+    rocblas_seedrand();
     rocblas_init<T>(hA, A_row, A_col, lda);
     rocblas_init<T>(hB, B_row, B_col, ldb);
 
@@ -241,47 +201,37 @@ rocblas_status testing_geam(Arguments argus)
     hB_copy = hB;
 
     // allocate memory on device
-    auto dA_managed = rocblas_unique_ptr{rocblas_test::device_malloc(sizeof(T) * size_A),
-                                         rocblas_test::device_free};
-    auto dB_managed = rocblas_unique_ptr{rocblas_test::device_malloc(sizeof(T) * size_B),
-                                         rocblas_test::device_free};
-    auto dC_managed = rocblas_unique_ptr{rocblas_test::device_malloc(sizeof(T) * size_C),
-                                         rocblas_test::device_free};
-    auto d_alpha_managed =
-        rocblas_unique_ptr{rocblas_test::device_malloc(sizeof(T)), rocblas_test::device_free};
-    auto d_beta_managed =
-        rocblas_unique_ptr{rocblas_test::device_malloc(sizeof(T)), rocblas_test::device_free};
-    T* dA      = (T*)dA_managed.get();
-    T* dB      = (T*)dB_managed.get();
-    T* dC      = (T*)dC_managed.get();
-    T* d_alpha = (T*)d_alpha_managed.get();
-    T* d_beta  = (T*)d_beta_managed.get();
+    device_vector<T> dA(size_A);
+    device_vector<T> dB(size_B);
+    device_vector<T> dC(size_C);
+    device_vector<T> d_alpha(1);
+    device_vector<T> d_beta(1);
     if(!dA || !dB || !dC || !d_alpha || !d_beta)
     {
-        PRINT_IF_HIP_ERROR(hipErrorOutOfMemory);
-        return rocblas_status_memory_error;
+        CHECK_HIP_ERROR(hipErrorOutOfMemory);
+        return;
     }
 
     // copy data from CPU to device
-    CHECK_HIP_ERROR(hipMemcpy(dA, hA.data(), sizeof(T) * size_A, hipMemcpyHostToDevice));
-    CHECK_HIP_ERROR(hipMemcpy(dB, hB.data(), sizeof(T) * size_B, hipMemcpyHostToDevice));
+    CHECK_HIP_ERROR(hipMemcpy(dA, hA, sizeof(T) * size_A, hipMemcpyHostToDevice));
+    CHECK_HIP_ERROR(hipMemcpy(dB, hB, sizeof(T) * size_B, hipMemcpyHostToDevice));
     CHECK_HIP_ERROR(hipMemcpy(d_alpha, &h_alpha, sizeof(T), hipMemcpyHostToDevice));
     CHECK_HIP_ERROR(hipMemcpy(d_beta, &h_beta, sizeof(T), hipMemcpyHostToDevice));
 
-    if(argus.unit_check || argus.norm_check)
+    if(arg.unit_check || arg.norm_check)
     {
         // ROCBLAS
         CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_host));
         CHECK_ROCBLAS_ERROR(rocblas_geam<T>(
             handle, transA, transB, M, N, &h_alpha, dA, lda, &h_beta, dB, ldb, dC, ldc));
 
-        CHECK_HIP_ERROR(hipMemcpy(hC_1.data(), dC, sizeof(T) * size_C, hipMemcpyDeviceToHost));
+        CHECK_HIP_ERROR(hipMemcpy(hC_1, dC, sizeof(T) * size_C, hipMemcpyDeviceToHost));
 
         CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_device));
         CHECK_ROCBLAS_ERROR(rocblas_geam<T>(
             handle, transA, transB, M, N, d_alpha, dA, lda, d_beta, dB, ldb, dC, ldc));
 
-        CHECK_HIP_ERROR(hipMemcpy(hC_2.data(), dC, sizeof(T) * size_C, hipMemcpyDeviceToHost));
+        CHECK_HIP_ERROR(hipMemcpy(hC_2, dC, sizeof(T) * size_C, hipMemcpyDeviceToHost));
 
         // reference calculation for golden result
         cpu_time_used = get_time_us();
@@ -298,21 +248,16 @@ rocblas_status testing_geam(Arguments argus)
         cpu_time_used = get_time_us() - cpu_time_used;
         cblas_gflops  = geam_gflop_count<T>(M, N) / cpu_time_used * 1e6;
 
-        // enable unit check, notice unit check is not invasive, but norm check is,
-        // unit check and norm check can not be interchanged their order
-        if(argus.unit_check)
+        if(arg.unit_check)
         {
-            unit_check_general<T>(M, N, ldc, hC_gold.data(), hC_1.data());
-            unit_check_general<T>(M, N, ldc, hC_gold.data(), hC_2.data());
+            unit_check_general<T>(M, N, ldc, hC_gold, hC_1);
+            unit_check_general<T>(M, N, ldc, hC_gold, hC_2);
         }
 
-        // if enable norm check, norm check is invasive
-        // any typeinfo(T) will not work here, because template deduction is matched
-        // in compilation time
-        if(argus.norm_check)
+        if(arg.norm_check)
         {
-            rocblas_error_1 = norm_check_general<T>('F', M, N, ldc, hC_gold.data(), hC_1.data());
-            rocblas_error_2 = norm_check_general<T>('F', M, N, ldc, hC_gold.data(), hC_2.data());
+            rocblas_error_1 = norm_check_general<T>('F', M, N, ldc, hC_gold, hC_1);
+            rocblas_error_2 = norm_check_general<T>('F', M, N, ldc, hC_gold, hC_2);
         }
 
         // inplace check for dC == dA
@@ -320,31 +265,30 @@ rocblas_status testing_geam(Arguments argus)
             dC_in_place = dA;
 
             CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_host));
-            status_h = rocblas_geam<T>(handle,
-                                       transA,
-                                       transB,
-                                       M,
-                                       N,
-                                       &h_alpha,
-                                       dA,
-                                       lda,
-                                       &h_beta,
-                                       dB,
-                                       ldb,
-                                       dC_in_place,
-                                       ldc);
+            auto status_h = rocblas_geam<T>(handle,
+                                            transA,
+                                            transB,
+                                            M,
+                                            N,
+                                            &h_alpha,
+                                            dA,
+                                            lda,
+                                            &h_beta,
+                                            dB,
+                                            ldb,
+                                            dC_in_place,
+                                            ldc);
 
             if(lda != ldc || transA != rocblas_operation_none)
             {
-                verify_rocblas_status_invalid_size(status_h, "rocblas_geam inplace C==A");
+                EXPECT_ROCBLAS_STATUS(status_h, rocblas_status_invalid_size);
             }
             else
             {
                 CHECK_HIP_ERROR(
-                    hipMemcpy(hC_1.data(), dC_in_place, sizeof(T) * size_C, hipMemcpyDeviceToHost));
+                    hipMemcpy(hC_1, dC_in_place, sizeof(T) * size_C, hipMemcpyDeviceToHost));
                 // dA was clobbered by dC_in_place, so copy hA back to dA
-                CHECK_HIP_ERROR(
-                    hipMemcpy(dA, hA.data(), sizeof(T) * size_A, hipMemcpyHostToDevice));
+                CHECK_HIP_ERROR(hipMemcpy(dA, hA, sizeof(T) * size_A, hipMemcpyHostToDevice));
 
                 // reference calculation
                 for(int i1 = 0; i1 < M; i1++)
@@ -356,20 +300,14 @@ rocblas_status testing_geam(Arguments argus)
                     }
                 }
 
-                // enable unit check, notice unit check is not invasive, but norm check is,
-                // unit check and norm check can not be interchanged their order
-                if(argus.unit_check)
+                if(arg.unit_check)
                 {
-                    unit_check_general<T>(M, N, ldc, hC_gold.data(), hC_1.data());
+                    unit_check_general<T>(M, N, ldc, hC_gold, hC_1);
                 }
 
-                // if enable norm check, norm check is invasive
-                // any typeinfo(T) will not work here, because template deduction is matched
-                // in compilation time
-                if(argus.norm_check)
+                if(arg.norm_check)
                 {
-                    rocblas_error =
-                        norm_check_general<T>('F', M, N, ldc, hC_gold.data(), hC_1.data());
+                    rocblas_error = norm_check_general<T>('F', M, N, ldc, hC_gold, hC_1);
                 }
             }
         }
@@ -379,30 +317,30 @@ rocblas_status testing_geam(Arguments argus)
             dC_in_place = dB;
 
             CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_host));
-            status_h = rocblas_geam<T>(handle,
-                                       transA,
-                                       transB,
-                                       M,
-                                       N,
-                                       &h_alpha,
-                                       dA,
-                                       lda,
-                                       &h_beta,
-                                       dB,
-                                       ldb,
-                                       dC_in_place,
-                                       ldc);
+            auto status_h = rocblas_geam<T>(handle,
+                                            transA,
+                                            transB,
+                                            M,
+                                            N,
+                                            &h_alpha,
+                                            dA,
+                                            lda,
+                                            &h_beta,
+                                            dB,
+                                            ldb,
+                                            dC_in_place,
+                                            ldc);
 
             if(ldb != ldc || transB != rocblas_operation_none)
             {
-                verify_rocblas_status_invalid_size(status_h, "rocblas_geam inplace C==A");
+                EXPECT_ROCBLAS_STATUS(status_h, rocblas_status_invalid_size);
             }
             else
             {
-                verify_rocblas_status_success(status_h, "status_h rocblas_geam inplace C==A");
+                CHECK_ROCBLAS_ERROR(status_h);
 
                 CHECK_HIP_ERROR(
-                    hipMemcpy(hC_1.data(), dC_in_place, sizeof(T) * size_C, hipMemcpyDeviceToHost));
+                    hipMemcpy(hC_1, dC_in_place, sizeof(T) * size_C, hipMemcpyDeviceToHost));
 
                 // reference calculation
                 for(int i1 = 0; i1 < M; i1++)
@@ -414,26 +352,20 @@ rocblas_status testing_geam(Arguments argus)
                     }
                 }
 
-                // enable unit check, notice unit check is not invasive, but norm check is,
-                // unit check and norm check can not be interchanged their order
-                if(argus.unit_check)
+                if(arg.unit_check)
                 {
-                    unit_check_general<T>(M, N, ldc, hC_gold.data(), hC_1.data());
+                    unit_check_general<T>(M, N, ldc, hC_gold, hC_1);
                 }
 
-                // if enable norm check, norm check is invasive
-                // any typeinfo(T) will not work here, because template deduction is matched
-                // in compilation time
-                if(argus.norm_check)
+                if(arg.norm_check)
                 {
-                    rocblas_error =
-                        norm_check_general<T>('F', M, N, ldc, hC_gold.data(), hC_1.data());
+                    rocblas_error = norm_check_general<T>('F', M, N, ldc, hC_gold, hC_1);
                 }
             }
         }
     } // end of if unit/norm check
 
-    if(argus.timing)
+    if(arg.timing)
     {
         int number_cold_calls = 2;
         int number_hot_calls  = 10;
@@ -442,36 +374,35 @@ rocblas_status testing_geam(Arguments argus)
 
         for(int i = 0; i < number_cold_calls; i++)
         {
-            status = rocblas_geam<T>(
+            rocblas_geam<T>(
                 handle, transA, transB, M, N, &h_alpha, dA, lda, &h_beta, dB, ldb, dC, ldc);
         }
 
         gpu_time_used = get_time_us(); // in microseconds
         for(int i = 0; i < number_hot_calls; i++)
         {
-            status = rocblas_geam<T>(
+            rocblas_geam<T>(
                 handle, transA, transB, M, N, &h_alpha, dA, lda, &h_beta, dB, ldb, dC, ldc);
         }
         gpu_time_used  = get_time_us() - gpu_time_used;
         rocblas_gflops = geam_gflop_count<T>(M, N) * number_hot_calls / gpu_time_used * 1e6;
 
-        cout << "transA,transB,M,N,alpha,lda,beta,ldb,ldc,rocblas-Gflops,us";
-        if(argus.unit_check || argus.norm_check)
+        std::cout << "transA,transB,M,N,alpha,lda,beta,ldb,ldc,rocblas-Gflops,us";
+        if(arg.unit_check || arg.norm_check)
         {
-            cout << ",CPU-Gflops,us,norm_error_ptr_host,norm_error_ptr_dev";
+            std::cout << ",CPU-Gflops,us,norm_error_ptr_host,norm_error_ptr_dev";
         }
-        cout << endl;
+        std::cout << std::endl;
 
-        cout << argus.transA_option << argus.transB_option << "," << M << "," << N << "," << h_alpha
-             << "," << lda << "," << h_beta << "," << ldb << "," << ldc << "," << rocblas_gflops
-             << "," << gpu_time_used / number_hot_calls << ",";
+        std::cout << arg.transA << arg.transB << "," << M << "," << N << "," << h_alpha << ","
+                  << lda << "," << h_beta << "," << ldb << "," << ldc << "," << rocblas_gflops
+                  << "," << gpu_time_used / number_hot_calls << ",";
 
-        if(argus.unit_check || argus.norm_check)
+        if(arg.unit_check || arg.norm_check)
         {
-            cout << cblas_gflops << "," << cpu_time_used << ",";
-            cout << rocblas_error_1 << "," << rocblas_error_2;
+            std::cout << cblas_gflops << "," << cpu_time_used << ",";
+            std::cout << rocblas_error_1 << "," << rocblas_error_2;
         }
-        cout << endl;
+        std::cout << std::endl;
     }
-    return status;
 }
